@@ -1,13 +1,14 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import os
 
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score, davies_bouldin_score
 
 # =============================
-# KONFIGURASI AWAL
+# KONFIGURASI HALAMAN
 # =============================
 st.set_page_config(
     page_title="EduCluster",
@@ -16,7 +17,29 @@ st.set_page_config(
 )
 
 # =============================
-# SESSION STATE INIT
+# LOAD MODEL (DILATIH SEKALI)
+# =============================
+@st.cache_resource
+def load_model():
+    # Data referensi (contoh / data latih)
+    reference_data = pd.DataFrame({
+        "Daily_Usage_Hours": [0.5, 1, 2, 3, 4, 5, 6],
+        "Trust_in_AI_Tools": [2, 3, 3, 4, 4, 5, 5],
+        "Impact_on_Grades": [-1, 0, 0, 1, 1, 1, 1]
+    })
+
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(reference_data)
+
+    model = KMeans(n_clusters=3, random_state=42)
+    model.fit(X_scaled)
+
+    return scaler, model
+
+scaler, kmeans_model = load_model()
+
+# =============================
+# SESSION STATE
 # =============================
 defaults = {
     "logged_in": False,
@@ -33,16 +56,24 @@ for k, v in defaults.items():
         st.session_state[k] = v
 
 # =============================
+# FUNGSI SIMPAN DATA SISWA
+# =============================
+def save_student_data(df):
+    file_path = "student_data.csv"
+    header = not os.path.exists(file_path)
+    df.to_csv(file_path, mode="a", header=header, index=False)
+
+# =============================
 # SIDEBAR
 # =============================
 st.sidebar.title("🎓 EduCluster")
+
 if st.session_state.logged_in:
     st.sidebar.divider()
-    if st.sidebar.button("🔙 Kembali ke Login"):
+    if st.sidebar.button("🔙 Logout"):
         st.session_state.logged_in = False
         st.session_state.role = None
         st.rerun()
-
 
 if not st.session_state.logged_in:
     menu = st.sidebar.radio("Menu", ["Home", "Login"])
@@ -67,8 +98,8 @@ if menu == "Home":
 
     st.write("""
     **EduCluster** adalah sistem berbasis data science untuk menganalisis
-    dampak penggunaan Artificial Intelligence (AI) terhadap performa
-    akademik siswa menggunakan **K-Means Clustering**.
+    dampak penggunaan Artificial Intelligence (AI) terhadap performa akademik
+    siswa menggunakan algoritma **K-Means Clustering**.
     """)
 
     if st.session_state.logged_in:
@@ -91,7 +122,7 @@ elif menu == "Login":
         else:
             st.session_state.logged_in = True
             st.session_state.role = role
-            st.success(f"Login berhasil sebagai {role}")
+            st.success("Login berhasil")
             st.rerun()
 
 # =============================
@@ -121,8 +152,11 @@ elif menu == "Input Data Siswa":
     if submit:
         usage_map = {"< 1 jam": 0.5, "1–3 jam": 2, "3–5 jam": 4, "> 5 jam": 6}
         trust_map = {
-            "Sangat Tidak Percaya": 1, "Tidak Percaya": 2,
-            "Netral": 3, "Percaya": 4, "Sangat Percaya": 5
+            "Sangat Tidak Percaya": 1,
+            "Tidak Percaya": 2,
+            "Netral": 3,
+            "Percaya": 4,
+            "Sangat Percaya": 5
         }
         impact_map = {"Menurun": -1, "Tidak Berubah": 0, "Meningkat": 1}
 
@@ -132,13 +166,17 @@ elif menu == "Input Data Siswa":
             "Impact_on_Grades": impact_map[q3]
         }])
 
-        X_scaled = StandardScaler().fit_transform(df)
-        cluster = KMeans(n_clusters=3, random_state=42).fit_predict(X_scaled)[0]
+        # Prediksi cluster (TANPA FIT ULANG)
+        X_user_scaled = scaler.transform(df)
+        cluster = kmeans_model.predict(X_user_scaled)[0]
 
         st.session_state.user_data = df
         st.session_state.cluster_result = cluster
 
-        st.success("Data berhasil diproses")
+        # Simpan data siswa ke CSV
+        save_student_data(df)
+
+        st.success("Data berhasil diproses & disimpan")
         st.rerun()
 
 # =============================
@@ -148,10 +186,10 @@ elif menu == "Dashboard Siswa":
     st.title("📊 Dashboard Siswa")
 
     if st.session_state.cluster_result is None:
-        st.warning("Isi data terlebih dahulu")
+        st.warning("Silakan isi data terlebih dahulu")
     else:
-        cluster = st.session_state.cluster_result
         labels = ["🔵 Light User", "🟡 Moderate User", "🟢 Heavy User"]
+        cluster = st.session_state.cluster_result
 
         st.subheader(f"Hasil Klaster: {labels[cluster]}")
         st.dataframe(st.session_state.user_data)
@@ -160,9 +198,9 @@ elif menu == "Dashboard Siswa":
 # UPLOAD DATASET (GURU)
 # =============================
 elif menu == "Upload Dataset":
-    st.title("📂 Upload Dataset")
+    st.title("📂 Upload Dataset (Guru)")
 
-    file = st.file_uploader("Upload CSV", type=["csv"])
+    file = st.file_uploader("Upload file CSV", type=["csv"])
 
     if file:
         df = pd.read_csv(file)
@@ -171,7 +209,9 @@ elif menu == "Upload Dataset":
             ["Daily_Usage_Hours", "Trust_in_AI_Tools", "Impact_on_Grades"]
         ]
 
-        X_scaled = StandardScaler().fit_transform(features)
+        scaler_guru = StandardScaler()
+        X_scaled = scaler_guru.fit_transform(features)
+
         kmeans = KMeans(n_clusters=3, random_state=42)
         labels = kmeans.fit_predict(X_scaled)
 
@@ -181,8 +221,8 @@ elif menu == "Upload Dataset":
         st.session_state.silhouette = silhouette_score(X_scaled, labels)
         st.session_state.dbi = davies_bouldin_score(X_scaled, labels)
 
-        st.success("Dataset berhasil diproses")
-        st.dataframe(df.head())
+        st.success("Dataset guru berhasil diproses")
+        st.dataframe(df.head(20))
 
 # =============================
 # DASHBOARD GURU
@@ -197,10 +237,13 @@ elif menu == "Dashboard Guru":
         col1.metric("Silhouette Score", round(st.session_state.silhouette, 3))
         col2.metric("Davies-Bouldin Index", round(st.session_state.dbi, 3))
 
+        st.subheader("Distribusi Cluster")
         st.bar_chart(
             st.session_state.teacher_df["Cluster"].value_counts()
         )
 
+        st.subheader("Rata-rata Fitur per Cluster")
         st.dataframe(
             st.session_state.teacher_df.groupby("Cluster").mean()
         )
+
